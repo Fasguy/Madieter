@@ -120,9 +120,6 @@ public class DownloadController : Controller
                 context.Features.Get<IHttpResponseBodyFeature>()!.DisableBuffering();
                 context.Response.ContentType = "application/octet-stream";
                 context.Response.Headers.Append("Content-Disposition", $"attachment; filename=\"{root.Name}.zip\"");
-                //Size is only approximate. Http no likey. Will often fail.
-                //Unfortunately required to not generate incomplete packages on failure.
-                //TODO: If I can not figure out Zip64, then just store everything in a tar and zip that instead.
                 context.Response.Headers.Append("Content-Length", finalSize.ToString());
 
                 bodyStream = context.Response.BodyWriter.AsStream();
@@ -337,26 +334,22 @@ public class DownloadController : Controller
     {
         //zip_size = num_of_files * (30 + 16 + 46) + 2 * total_length_of_filenames + total_size_of_files + 22
 
+        const int endOfCentralDirectoryRecord = 22;
+
+        //Files
+        const int localFileHeader = 30;
+        const int dataDescriptor = 16;
+        const int centralDirectoryFileHeader = 46;
+
+        //Zip64
+        const int endOfCentralDirectoryRecord64 = 56;
+        const int endOfCentralDirectoryLocator = 20;
+
         // ReSharper disable once PossibleMultipleEnumeration
         IEnumerable<INode> files = items.Where(x => x.Type == NodeType.File).ToArray();
         long totalSizeOfFiles = 0;
         long totalLengthOfFileNames = 0;
 
-        int extraFields = 0;
-
-        foreach (INode file in files)
-        {
-            if (totalSizeOfFiles > uint.MaxValue)
-            {
-                extraFields++;
-            }
-
-            totalSizeOfFiles += file.Size;
-            // ReSharper disable once PossibleMultipleEnumeration
-            totalLengthOfFileNames += (GetParents(file, items) + "/" + file.Name).Length;
-        }
-
-        // TODO: I really need to properly look into the zip64 specification to see what the differences /actually/ are.
         bool zip64 = false;
 
         int numOfFiles = files.Count();
@@ -366,14 +359,39 @@ public class DownloadController : Controller
             zip64 = true;
         }
 
-        const int localFileHeader = 30;
-        const int dataDescriptor = 16;
-        const int centralDirectoryFileHeader = 46;
-        const int endOfCentralDirectoryRecord = 22;
+        long offsetOfLocalHeader = 0;
 
-        //Zip64
-        const int endOfCentralDirectoryRecord64 = 56;
-        const int endOfCentralDirectoryLocator = 20;
+        foreach (INode file in files)
+        {
+            bool isZip64File = false;
+
+            if (file.Size > uint.MaxValue)
+            {
+                zip64 = isZip64File = true;
+                totalSizeOfFiles += 8; //Uncompressed Size Zip64 Field
+                totalSizeOfFiles += 8; //Compressed Size Zip64 Field
+            }
+
+            if (offsetOfLocalHeader > uint.MaxValue)
+            {
+                zip64 = isZip64File = true;
+                totalSizeOfFiles += 8; //Local Header Offset Zip64 Field
+            }
+
+            totalSizeOfFiles += file.Size;
+
+            if (isZip64File)
+            {
+                totalSizeOfFiles += 4;
+            }
+
+            // ReSharper disable once PossibleMultipleEnumeration
+            int fileNameLength = (GetParents(file, items) + "/" + file.Name).Length;
+
+            offsetOfLocalHeader += localFileHeader + dataDescriptor + file.Size + fileNameLength;
+
+            totalLengthOfFileNames += fileNameLength;
+        }
 
         long totalSize = numOfFiles * (localFileHeader + dataDescriptor + centralDirectoryFileHeader) + 2 * totalLengthOfFileNames + totalSizeOfFiles;
 
@@ -384,12 +402,10 @@ public class DownloadController : Controller
 
         if (zip64)
         {
-            totalSize += endOfCentralDirectoryRecord64 + endOfCentralDirectoryLocator + (extraFields * 28) - 10;
+            totalSize += endOfCentralDirectoryRecord64 + endOfCentralDirectoryLocator;
         }
-        else
-        {
-            totalSize += endOfCentralDirectoryRecord;
-        }
+
+        totalSize += endOfCentralDirectoryRecord;
 
         return totalSize;
     }

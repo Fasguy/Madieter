@@ -386,7 +386,7 @@ public class DownloadController : Controller
             }
 
             // ReSharper disable once PossibleMultipleEnumeration
-            int fileNameLength = (GetParents(file, items) + "/" + file.Name).Length;
+            int fileNameLength = Encoding.UTF8.GetByteCount(GetParents(file, items) + "/" + file.Name);
 
             offsetOfLocalHeader += localFileHeader + dataDescriptor + file.Size + fileNameLength;
 

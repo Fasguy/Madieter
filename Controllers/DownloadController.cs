@@ -349,6 +349,7 @@ public class DownloadController : Controller
         IEnumerable<INode> files = items.Where(x => x.Type == NodeType.File).ToArray();
         long totalSizeOfFiles = 0;
         long totalLengthOfFileNames = 0;
+        long totalZip64FileBytes = 0;
 
         bool zip64 = false;
 
@@ -368,22 +369,22 @@ public class DownloadController : Controller
             if (file.Size > uint.MaxValue)
             {
                 zip64 = isZip64File = true;
-                totalSizeOfFiles += 8; //Uncompressed Size Zip64 Field
-                totalSizeOfFiles += 8; //Compressed Size Zip64 Field
+                totalZip64FileBytes += 8; //Uncompressed Size Zip64 Field
+                totalZip64FileBytes += 8; //Compressed Size Zip64 Field
             }
 
             if (offsetOfLocalHeader > uint.MaxValue)
             {
                 zip64 = isZip64File = true;
-                totalSizeOfFiles += 8; //Local Header Offset Zip64 Field
+                totalZip64FileBytes += 8; //Local Header Offset Zip64 Field
             }
-
-            totalSizeOfFiles += file.Size;
 
             if (isZip64File)
             {
-                totalSizeOfFiles += 4;
+                totalZip64FileBytes += 4;
             }
+
+            totalSizeOfFiles += file.Size;
 
             // ReSharper disable once PossibleMultipleEnumeration
             int fileNameLength = Encoding.UTF8.GetByteCount(GetParents(file, items) + "/" + file.Name);
@@ -393,7 +394,7 @@ public class DownloadController : Controller
             totalLengthOfFileNames += fileNameLength;
         }
 
-        long totalSize = numOfFiles * (localFileHeader + dataDescriptor + centralDirectoryFileHeader) + 2 * totalLengthOfFileNames + totalSizeOfFiles;
+        long totalSize = numOfFiles * (localFileHeader + dataDescriptor + centralDirectoryFileHeader) + 2 * totalLengthOfFileNames + totalSizeOfFiles + totalZip64FileBytes;
 
         if (totalSize > uint.MaxValue)
         {
@@ -403,6 +404,13 @@ public class DownloadController : Controller
         if (zip64)
         {
             totalSize += endOfCentralDirectoryRecord64 + endOfCentralDirectoryLocator;
+
+            if (numOfFiles == 1)
+            {
+                // For a reason that I don't really understand, if it's a Zip64 file and there is only one file in total, then the zip grows an additional 8 bytes.
+                // I have worked my way through the zip creation process with the debugger, but can not seem to figure out what causes this.
+                totalSize += 8;
+            }
         }
 
         totalSize += endOfCentralDirectoryRecord;

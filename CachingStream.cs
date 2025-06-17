@@ -48,7 +48,8 @@ public class CachingStream : Stream
     {
         if (disposing)
         {
-            _normalStream.Dispose();
+            //Don't dispose for SharpZipLib, as we're accessing the zip stream directly.
+            //_normalStream.Dispose();
             string cacheFileName = _cacheFile.Name;
             _cacheFile.Dispose();
             if (File.Exists(cacheFileName))

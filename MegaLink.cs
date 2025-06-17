@@ -2,7 +2,7 @@
 
 namespace Madieter;
 
-public class MegaLink
+public partial class MegaLink
 {
 	private static readonly string[] _folderValues =
 	[
@@ -10,11 +10,11 @@ public class MegaLink
 		"F"
 	];
 
-	public Uri? Normalized { get; init; }
+	public Uri? Normalized { get; }
 
-	public LinkType Type { get; init; }
+	public LinkType Type { get; }
 
-	public bool Valid { get; init; }
+	public bool Valid { get; }
 
 	public string Id { get; } = string.Empty;
 
@@ -38,9 +38,9 @@ public class MegaLink
 	{
 		return
 			//Modern Uri
-			MatchRegex(new Regex("/(?<type>(file|folder))/(?<id>[^#]+)(#|!)(?<key>[^$/]+)"), out id, out key, out isFolder)
+			MatchRegex(ModernUriRegex(), out id, out key, out isFolder)
 			//Legacy Uri
-			|| MatchRegex(new Regex(@"#?(?<type>F?)!(?<id>[^!]+)!(?<key>[^$!\?]+)"), out id, out key, out isFolder);
+			|| MatchRegex(LegacyUriRegex(), out id, out key, out isFolder);
 
 		bool MatchRegex(Regex uriRegex, out string? id, out string? key, out bool isFolder)
 		{
@@ -55,7 +55,7 @@ public class MegaLink
 
 			id = null;
 			key = null;
-			isFolder = default;
+			isFolder = false;
 			return false;
 		}
 	}
@@ -66,4 +66,9 @@ public class MegaLink
 		File,
 		Folder
 	}
+
+    [GeneratedRegex("/(?<type>(file|folder))/(?<id>[^#]+)(#|!)(?<key>[^$/]+)")]
+    private static partial Regex ModernUriRegex();
+    [GeneratedRegex(@"#?(?<type>F?)!(?<id>[^!]+)!(?<key>[^$!\?]+)")]
+    private static partial Regex LegacyUriRegex();
 }

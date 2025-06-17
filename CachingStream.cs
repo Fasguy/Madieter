@@ -2,86 +2,86 @@
 
 public class CachingStream : Stream
 {
-    private readonly Stream _normalStream;
-    private readonly FileStream _cacheFile;
-    
-    public override bool CanRead => _normalStream.CanRead;
-    public override bool CanSeek => _normalStream.CanSeek;
-    public override bool CanWrite => _normalStream.CanWrite;
-    public override long Length => _normalStream.Length;
+	private readonly FileStream _cacheFile;
+	private readonly Stream _normalStream;
 
-    public override long Position
-    {
-        get => _normalStream.Position;
-        set => _normalStream.Position = _cacheFile.Position = value;
-    }
+	public override bool CanRead => _normalStream.CanRead;
+	public override bool CanSeek => _normalStream.CanSeek;
+	public override bool CanWrite => _normalStream.CanWrite;
+	public override long Length => _normalStream.Length;
 
-    // ReSharper disable once ConvertToPrimaryConstructor
-    public CachingStream(string cachePath, Stream normalStream)
-    {
-        _normalStream = normalStream;
-        _cacheFile = new FileStream(cachePath + ".tmp", FileMode.Create, FileAccess.Write);
-    }
+	public override long Position
+	{
+		get => _normalStream.Position;
+		set => _normalStream.Position = _cacheFile.Position = value;
+	}
 
-    public override void Flush()
-    {
-        _normalStream.Flush();
-        _cacheFile.Flush();
-    }
+	// ReSharper disable once ConvertToPrimaryConstructor
+	public CachingStream(string cachePath, Stream normalStream)
+	{
+		_normalStream = normalStream;
+		_cacheFile = new FileStream(cachePath + ".tmp", FileMode.Create, FileAccess.Write);
+	}
 
-    public override int Read(byte[] buffer, int offset, int count)
-    {
-        int value = _normalStream.Read(buffer, offset, count);
-        _cacheFile.Position += value;
-        return value;
-    }
+	public override void Flush()
+	{
+		_normalStream.Flush();
+		_cacheFile.Flush();
+	}
 
-    public override long Seek(long offset, SeekOrigin origin)
-    {
-        long value = _normalStream.Seek(offset, origin);
-        _cacheFile.Position = value;
-        return value;
-    }
+	public override int Read(byte[] buffer, int offset, int count)
+	{
+		int value = _normalStream.Read(buffer, offset, count);
+		_cacheFile.Position += value;
+		return value;
+	}
 
-    public override void SetLength(long value)
-    {
-        _normalStream.SetLength(value);
-        _cacheFile.SetLength(value);
-    }
+	public override long Seek(long offset, SeekOrigin origin)
+	{
+		long value = _normalStream.Seek(offset, origin);
+		_cacheFile.Position = value;
+		return value;
+	}
 
-    public override void Write(byte[] buffer, int offset, int count)
-    {
-        _normalStream.Write(buffer, offset, count);
-        _cacheFile.Write(buffer, offset, count);
-    }
+	public override void SetLength(long value)
+	{
+		_normalStream.SetLength(value);
+		_cacheFile.SetLength(value);
+	}
 
-    protected override void Dispose(bool disposing)
-    {
-        if (disposing)
-        {
-            _normalStream.Dispose();
-            string cacheFileName = _cacheFile.Name;
-            _cacheFile.Dispose();
-            if (File.Exists(cacheFileName))
-            {
-                string destCacheFileName = cacheFileName[..^4];
-                File.Delete(destCacheFileName);
-                File.Move(cacheFileName, destCacheFileName);
-            }
-        }
+	public override void Write(byte[] buffer, int offset, int count)
+	{
+		_normalStream.Write(buffer, offset, count);
+		_cacheFile.Write(buffer, offset, count);
+	}
 
-        base.Dispose(disposing);
-    }
-    
-    public static bool TryGetCache(string cachePath, long expectedSize, out Stream? cacheStream)
-    {
-        if (File.Exists(cachePath) && new FileInfo(cachePath).Length == expectedSize)
-        {
-            cacheStream = new FileStream(cachePath, FileMode.Open, FileAccess.Read);
-            return true;
-        }
+	protected override void Dispose(bool disposing)
+	{
+		if (disposing)
+		{
+			_normalStream.Dispose();
+			string cacheFileName = _cacheFile.Name;
+			_cacheFile.Dispose();
+			if (File.Exists(cacheFileName))
+			{
+				string destCacheFileName = cacheFileName[..^4];
+				File.Delete(destCacheFileName);
+				File.Move(cacheFileName, destCacheFileName);
+			}
+		}
 
-        cacheStream = null;
-        return false;
-    }
+		base.Dispose(disposing);
+	}
+
+	public static bool TryGetCache(string cachePath, long expectedSize, out Stream? cacheStream)
+	{
+		if (File.Exists(cachePath) && new FileInfo(cachePath).Length == expectedSize)
+		{
+			cacheStream = new FileStream(cachePath, FileMode.Open, FileAccess.Read);
+			return true;
+		}
+
+		cacheStream = null;
+		return false;
+	}
 }

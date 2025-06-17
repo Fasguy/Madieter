@@ -3,7 +3,6 @@ using System.IO.Compression;
 using System.Net;
 using System.Text;
 using CG.Web.MegaApiClient;
-using Madieter.Extensions;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 
@@ -130,40 +129,6 @@ public class MegaController : Controller
 
                 Directory.CreateDirectory(cacheDirectory);
 
-                // 	using (ZipOutputStream zipStream = new(bodyStream))
-                // 	{
-                // 		zipStream.SetLevel(0);
-                // 		// Force Zip64 to simplify 
-                // 		zipStream.UseZip64 = UseZip64.On;
-                //
-                // 		foreach (INode file in files)
-                // 		{
-                // 			ZipEntry entry = new(GetParents(file, nodes) + "/" + file.Name)
-                // 			{
-                // 				CompressionMethod = CompressionMethod.Stored,
-                // 				Size = file.Size
-                // 			};
-                //
-                // 			zipStream.PutNextEntry(entry);
-                //
-                // 			string cachePath = Path.Combine("cache", link.Id, file.Fingerprint);
-                //
-                // 			if (TryGetCache(cachePath, file.Size, out cacheStream))
-                // 			{
-                // 				Debug.Assert(cacheStream != null, nameof(cacheStream) + " != null");
-                // 				await cacheStream.CopyToAsync(zipStream, 1024 * 64, cts.Token);
-                // 				await cacheStream.DisposeAsync();
-                // 			}
-                // 			else
-                // 			{
-                // 				cacheStream = new CachingStream(cachePath, zipStream);
-                // 				await client.DownloadFileAsync(file, cacheStream);
-                // 				await cacheStream.DisposeAsync();
-                // 			}
-                //
-                // 			zipStream.CloseEntry();
-                // 		}
-                // 	}
                 using (ZipArchive archive = new(bodyStream, ZipArchiveMode.Create, true))
                 {
                     foreach (INode file in files)
@@ -174,7 +139,7 @@ public class MegaController : Controller
 
                         string cachePath = Path.Combine("cache", link.Id, file.Fingerprint);
 
-                        if (zipEntry.TryGetCache(cachePath, out cacheStream))
+                        if (CachingStream.TryGetCache(cachePath, file.Size, out cacheStream))
                         {
                             Debug.Assert(cacheStream != null, nameof(cacheStream) + " != null");
                             await cacheStream.CopyToAsync(entryStream, 1024 * 64, cts.Token);
@@ -287,7 +252,7 @@ public class MegaController : Controller
                 CancelRequest(503, true);
             }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
             await cts.CancelAsync();
             throw;
@@ -466,7 +431,8 @@ public class MegaController : Controller
         return string.Join('/', parents);
     }
 
-    private static readonly string[] _sizeSuffixes = [
+    private static readonly string[] _sizeSuffixes =
+    [
         "bytes",
         "KB",
         "MB",

@@ -10,7 +10,10 @@ public class Credentials
 
 	public static void CreateFile()
 	{
-		File.WriteAllText("credentials.json", JsonSerializer.Serialize(new Credentials()));
+		if (!File.Exists("credentials.json"))
+		{
+			File.WriteAllText("credentials.json", JsonSerializer.Serialize(new Credentials()));
+		}
 	}
 
 	public static bool TryRead(out Credentials? result)

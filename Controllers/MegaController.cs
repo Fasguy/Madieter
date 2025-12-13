@@ -31,14 +31,9 @@ public class MegaController : Controller
 	{
 		if (string.IsNullOrEmpty(url)) throw new ArgumentNullException(nameof(url));
 
-		// Yes, I know that just manually enforcing a bandwidth limit is not a good idea.
-		// It does the job well enough.
-		if (DateTime.Now - _bandwidthLimited < TimeSpan.FromHours(1))
-		{
-			Console.WriteLine("Bandwidth has been limited. Request will not be handled.");
-			HttpContext.Response.StatusCode = 509;
-			return;
-		}
+		Console.WriteLine("#############################################");
+
+		if (HasBandwidthExceeded()) return;
 
 		Console.WriteLine($"Received request for {url}");
 
@@ -59,55 +54,7 @@ public class MegaController : Controller
 
 		Credentials.CreateFile();
 
-		try
-		{
-			await client.LoginAnonymousAsync();
-		}
-		catch (ApiException ex)
-		{
-			switch (ex.ApiResultCode)
-			{
-				case ApiResultCode.RequestFailedRetry:
-					Console.WriteLine("The request failed. Retry after some time.");
-
-					context.Response.StatusCode = 503;
-					return;
-			}
-
-			throw;
-		}
-		catch (HttpRequestException ex)
-		{
-			if (ex.StatusCode == HttpStatusCode.PaymentRequired)
-			{
-				Console.WriteLine("Mega is returning 402 - Payment Required. Trying to log in as account.");
-
-				try
-				{
-					if (Credentials.TryRead(out Credentials? value))
-					{
-						await client.LoginAsync(value!.Email, value.Password, value.MfaKey);
-					}
-					else
-					{
-						Console.WriteLine("User hasn't provided login credentials. Responding as server error.");
-
-						context.Response.StatusCode = 503;
-						return;
-					}
-				}
-				catch (HttpRequestException ex2)
-				{
-					if (ex2.StatusCode == HttpStatusCode.PaymentRequired)
-					{
-						Console.WriteLine("Mega is still returning 402 - Payment Required. Responding as server error.");
-
-						context.Response.StatusCode = 503;
-						return;
-					}
-				}
-			}
-		}
+		if (!await HandleMegaLogin(client, context)) return;
 
 		using CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
 
@@ -329,6 +276,75 @@ public class MegaController : Controller
 				}
 			}
 		}
+	}
+
+	private static async Task<bool> HandleMegaLogin(MegaApiClient client, HttpContext context)
+	{
+		try
+		{
+			await client.LoginAnonymousAsync();
+		}
+		catch (ApiException ex)
+		{
+			switch (ex.ApiResultCode)
+			{
+				case ApiResultCode.RequestFailedRetry:
+					Console.WriteLine("The request failed. Retry after some time.");
+
+					context.Response.StatusCode = 503;
+					return false;
+			}
+
+			throw;
+		}
+		catch (HttpRequestException ex)
+		{
+			if (ex.StatusCode == HttpStatusCode.PaymentRequired)
+			{
+				Console.WriteLine("Mega is returning 402 - Payment Required. Trying to log in as account.");
+
+				try
+				{
+					if (Credentials.TryRead(out Credentials? value))
+					{
+						await client.LoginAsync(value!.Email, value.Password, value.MfaKey);
+					}
+					else
+					{
+						Console.WriteLine("User hasn't provided login credentials. Responding as server error.");
+
+						context.Response.StatusCode = 503;
+						return false;
+					}
+				}
+				catch (HttpRequestException ex2)
+				{
+					if (ex2.StatusCode == HttpStatusCode.PaymentRequired)
+					{
+						Console.WriteLine("Mega is still returning 402 - Payment Required. Responding as server error.");
+
+						context.Response.StatusCode = 503;
+						return false;
+					}
+				}
+			}
+		}
+
+		return true;
+	}
+
+	private bool HasBandwidthExceeded()
+	{
+		// Yes, I know that just manually enforcing a bandwidth limit is not a good idea.
+		// It does the job well enough.
+		if (DateTime.Now - _bandwidthLimited < TimeSpan.FromHours(1))
+		{
+			Console.WriteLine("Bandwidth has been limited. Request will not be handled.");
+			HttpContext.Response.StatusCode = 509;
+			return true;
+		}
+
+		return false;
 	}
 
 	private static long CalculateZipSize(IEnumerable<INode> items)

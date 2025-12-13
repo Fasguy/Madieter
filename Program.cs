@@ -1,9 +1,11 @@
-using System.Net;
-
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
 
-ServicePointManager.ServerCertificateValidationCallback +=
-	(_, _, _, _) => true;
+// Yes, this is not best practice, but I don't care, because it's not supposed to be accessed externally.
+builder.Services.AddHttpClient("SkipCert")
+	.ConfigurePrimaryHttpMessageHandler(() => new HttpClientHandler
+	{
+		ServerCertificateCustomValidationCallback = HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+	});
 
 // Add services to the container.
 

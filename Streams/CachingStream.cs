@@ -1,4 +1,4 @@
-﻿namespace Madieter;
+﻿namespace Madieter.Streams;
 
 public class CachingStream : Stream
 {
@@ -6,8 +6,8 @@ public class CachingStream : Stream
 	private readonly Stream _normalStream;
 
 	public override bool CanRead => _normalStream.CanRead;
-	public override bool CanSeek => _normalStream.CanSeek;
 	public override bool CanWrite => _normalStream.CanWrite;
+	public override bool CanSeek => _normalStream.CanSeek;
 	public override long Length => _normalStream.Length;
 
 	public override long Position
@@ -23,17 +23,17 @@ public class CachingStream : Stream
 		_cacheFile = new FileStream(cachePath + ".tmp", FileMode.Create, FileAccess.Write);
 	}
 
-	public override void Flush()
-	{
-		_normalStream.Flush();
-		_cacheFile.Flush();
-	}
-
 	public override int Read(byte[] buffer, int offset, int count)
 	{
 		int value = _normalStream.Read(buffer, offset, count);
 		_cacheFile.Position += value;
 		return value;
+	}
+
+	public override void Write(byte[] buffer, int offset, int count)
+	{
+		_normalStream.Write(buffer, offset, count);
+		_cacheFile.Write(buffer, offset, count);
 	}
 
 	public override long Seek(long offset, SeekOrigin origin)
@@ -49,10 +49,10 @@ public class CachingStream : Stream
 		_cacheFile.SetLength(value);
 	}
 
-	public override void Write(byte[] buffer, int offset, int count)
+	public override void Flush()
 	{
-		_normalStream.Write(buffer, offset, count);
-		_cacheFile.Write(buffer, offset, count);
+		_normalStream.Flush();
+		_cacheFile.Flush();
 	}
 
 	protected override void Dispose(bool disposing)
@@ -75,7 +75,7 @@ public class CachingStream : Stream
 
 	public static bool TryGetCache(string cachePath, long expectedSize, out Stream? cacheStream)
 	{
-		if (File.Exists(cachePath) && new FileInfo(cachePath).Length == expectedSize)
+		if (IsCached(cachePath, expectedSize))
 		{
 			cacheStream = new FileStream(cachePath, FileMode.Open, FileAccess.Read);
 			return true;
@@ -83,5 +83,10 @@ public class CachingStream : Stream
 
 		cacheStream = null;
 		return false;
+	}
+
+	public static bool IsCached(string cachePath, long expectedSize)
+	{
+		return File.Exists(cachePath) && new FileInfo(cachePath).Length == expectedSize;
 	}
 }

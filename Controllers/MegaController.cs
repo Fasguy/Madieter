@@ -1,8 +1,8 @@
 using System.Diagnostics;
-using System.IO.Compression;
 using System.Net;
-using System.Text;
 using CG.Web.MegaApiClient;
+using ICSharpCode.SharpZipLib.Zip;
+using Madieter.Streams;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Mvc;
 
@@ -11,6 +11,8 @@ namespace Madieter.Controllers;
 [Route("dl")]
 public class MegaController : Controller
 {
+	private const int ZIP_BUFFER = 1024 * 64;
+
 	private static DateTime? _bandwidthLimited;
 
 	private static readonly string[] _sizeSuffixes =
@@ -70,8 +72,8 @@ public class MegaController : Controller
 				IEnumerable<INode> files = nodes.Where(x => x.Type == NodeType.File);
 
 				INode root = nodes.First(x => x.Type == NodeType.Root);
-				long finalSize = CalculateZipSize(nodes);
-				Console.WriteLine($"Downloading {root.Name} (~{finalSize} bytes / ~{SizeSuffix(finalSize, 2)})");
+				long finalSize = GetZipSize(nodes);
+				Console.WriteLine($"Downloading {root.Name} ({finalSize} bytes / ~{SizeSuffix(finalSize, 2)})");
 
 				context.Features.Get<IHttpResponseBodyFeature>()!.DisableBuffering();
 				context.Response.ContentType = "application/octet-stream";
@@ -86,29 +88,52 @@ public class MegaController : Controller
 
 				Directory.CreateDirectory(cacheDirectory);
 
-				using (ZipArchive archive = new(bodyStream, ZipArchiveMode.Create, true))
+				// For debugging purposes.
+				//bodyStream = new CachingStream(Path.Combine($"/tmp/madieter_{link.Id}"), bodyStream);
+
+				// Move already cached elements to the back, so we don't waste time sending them if nothing else can be downloaded from MEGA right now.
+				files = files.OrderBy(x =>
 				{
+					string cachePath = Path.Combine("cache", link.Id, x.Fingerprint);
+
+					if (!CachingStream.IsCached(cachePath, x.Size))
+					{
+						return false;
+					}
+
+					Console.WriteLine($"{x.Name} ({x.Fingerprint}) is already cached. Moving to back.");
+					return true;
+				});
+
+				await using (PatchedZipOutputStream archive = new(bodyStream))
+				{
+					archive.UseZip64 = UseZip64.On;
+					archive.IsStreamOwner = false;
+
 					foreach (INode file in files)
 					{
-						ZipArchiveEntry zipEntry = archive.CreateEntry(GetParents(file, nodes) + "/" + file.Name, CompressionLevel.NoCompression);
-
-						await using Stream entryStream = zipEntry.Open();
+						ZipEntry entry = new($"{GetParents(file, nodes)}/{file.Name}") { CompressionMethod = CompressionMethod.Stored };
+						entry.Size = entry.CompressedSize = file.Size;
+						archive.PutNextEntry(entry);
 
 						string cachePath = Path.Combine("cache", link.Id, file.Fingerprint);
 
 						if (CachingStream.TryGetCache(cachePath, file.Size, out cacheStream))
 						{
-							Debug.Assert(cacheStream != null, nameof(cacheStream) + " != null");
-							await cacheStream.CopyToAsync(entryStream, 1024 * 64, cts.Token);
-							await cacheStream.DisposeAsync();
+							Debug.Assert(cacheStream != null, $"{nameof(cacheStream)} != null");
+							await cacheStream.CopyToAsync(archive, ZIP_BUFFER, cts.Token);
 						}
 						else
 						{
-							cacheStream = new CachingStream(cachePath, entryStream);
-							await client.DownloadFileAsync(file, cacheStream);
-							await cacheStream.DisposeAsync();
+							cacheStream = new CachingStream(cachePath, archive);
+							await client.DownloadFileAsync(file, cacheStream, cancellationToken: cts.Token);
 						}
+
+						await cacheStream.DisposeAsync();
+						await archive.CloseEntryAsync(cts.Token);
 					}
+
+					await archive.FinishAsync(cts.Token);
 				}
 
 				try
@@ -347,81 +372,42 @@ public class MegaController : Controller
 		return false;
 	}
 
-	private static long CalculateZipSize(IEnumerable<INode> items)
+
+	// Used to be calculated, but edge-cases kept failing sometimes, and I'm tired of constantly trying to figure out what failed.
+	private static long GetZipSize(IEnumerable<INode> items)
 	{
-		//zip_size = num_of_files * (30 + 16 + 46) + 2 * total_length_of_filenames + total_size_of_files + 22
+		CountingStream countingStream = new();
 
-		const int endOfCentralDirectoryRecord = 22;
+		IEnumerable<INode> enumerable = items.ToArray();
+		IEnumerable<INode> files = enumerable.Where(x => x.Type == NodeType.File);
 
-		//Files
-		const int localFileHeader = 30;
-		const int dataDescriptor = 16;
-		const int centralDirectoryFileHeader = 46;
-
-		//Zip64
-		const int endOfCentralDirectoryRecord64 = 56;
-		const int endOfCentralDirectoryLocator = 20;
-
-		// ReSharper disable once PossibleMultipleEnumeration
-		IEnumerable<INode> files = items.Where(x => x.Type == NodeType.File).ToArray();
-		long totalSizeOfFiles = 0;
-		long totalLengthOfFileNames = 0;
-		long totalZip64FileBytes = 0;
-
-		bool zip64 = false;
-
-		int numOfFiles = files.Count();
-
-		if (numOfFiles > 65535) zip64 = true;
-
-		long offsetOfLocalHeader = 0;
-
-		foreach (INode file in files)
+		using (PatchedZipOutputStream archive = new(countingStream))
 		{
-			bool isZip64File = false;
+			archive.UseZip64 = UseZip64.On;
+			archive.IsStreamOwner = false;
 
-			if (file.Size > uint.MaxValue)
+			foreach (INode file in files)
 			{
-				zip64 = isZip64File = true;
-				totalZip64FileBytes += 8; //Uncompressed Size Zip64 Field
-				totalZip64FileBytes += 8; //Compressed Size Zip64 Field
+				ZipEntry entry = new($"{GetParents(file, enumerable)}/{file.Name}") { CompressionMethod = CompressionMethod.Stored };
+				entry.Size = entry.CompressedSize = file.Size;
+
+				archive.PutNextEntry(entry);
+
+				// Hack to skip CRC calculation, just to squeeze that tiny bit of performance out.
+				entry.AESKeySize = 128;
+
+				FakeDataStream fakeDataStream = new(file.Size);
+				fakeDataStream.CopyTo(archive);
+
+				entry.AESKeySize = 0;
+
+				archive.CloseEntry();
 			}
 
-			if (offsetOfLocalHeader > uint.MaxValue)
-			{
-				zip64 = isZip64File = true;
-				totalZip64FileBytes += 8; //Local Header Offset Zip64 Field
-			}
-
-			if (isZip64File) totalZip64FileBytes += 4;
-
-			totalSizeOfFiles += file.Size;
-
-			// ReSharper disable once PossibleMultipleEnumeration
-			int fileNameLength = Encoding.UTF8.GetByteCount(GetParents(file, items) + "/" + file.Name);
-
-			offsetOfLocalHeader += localFileHeader + dataDescriptor + file.Size + fileNameLength;
-
-			totalLengthOfFileNames += fileNameLength;
+			archive.Finish();
 		}
 
-		long totalSize = numOfFiles * (localFileHeader + dataDescriptor + centralDirectoryFileHeader) + 2 * totalLengthOfFileNames + totalSizeOfFiles + totalZip64FileBytes;
-
-		if (totalSize > uint.MaxValue) zip64 = true;
-
-		if (zip64)
-		{
-			totalSize += endOfCentralDirectoryRecord64 + endOfCentralDirectoryLocator;
-
-			if (numOfFiles == 1)
-				// For a reason that I don't really understand, if it's a Zip64 file and there is only one file in total, then the zip grows an additional 8 bytes.
-				// I have worked my way through the zip creation process with the debugger, but can not seem to figure out what causes this.
-				totalSize += 8;
-		}
-
-		totalSize += endOfCentralDirectoryRecord;
-
-		return totalSize;
+		return countingStream.Length;
 	}
 
 	private static string GetParents(INode node, IEnumerable<INode> nodes)

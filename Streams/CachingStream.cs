@@ -4,6 +4,7 @@ public class CachingStream : Stream
 {
 	private readonly FileStream _cacheFile;
 	private readonly Stream _normalStream;
+	private readonly bool _leaveStreamOpen;
 
 	public override bool CanRead => _normalStream.CanRead;
 	public override bool CanWrite => _normalStream.CanWrite;
@@ -17,10 +18,11 @@ public class CachingStream : Stream
 	}
 
 	// ReSharper disable once ConvertToPrimaryConstructor
-	public CachingStream(string cachePath, Stream normalStream)
+	public CachingStream(string cachePath, Stream normalStream, bool leaveStreamOpen = false)
 	{
 		_normalStream = normalStream;
 		_cacheFile = new FileStream(cachePath + ".tmp", FileMode.Create, FileAccess.Write);
+		_leaveStreamOpen = leaveStreamOpen;
 	}
 
 	public override int Read(byte[] buffer, int offset, int count)
@@ -59,7 +61,11 @@ public class CachingStream : Stream
 	{
 		if (disposing)
 		{
-			_normalStream.Dispose();
+			if (!_leaveStreamOpen)
+			{
+				_normalStream.Dispose();
+			}
+
 			string cacheFileName = _cacheFile.Name;
 			_cacheFile.Dispose();
 			if (File.Exists(cacheFileName))

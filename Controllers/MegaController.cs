@@ -125,7 +125,7 @@ public class MegaController : Controller
 						}
 						else
 						{
-							cacheStream = new CachingStream(cachePath, archive);
+							cacheStream = new CachingStream(cachePath, archive, true);
 							await client.DownloadFileAsync(file, cacheStream, cancellationToken: cts.Token);
 						}
 
